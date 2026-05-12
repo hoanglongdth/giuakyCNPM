@@ -218,7 +218,7 @@ export default function App() {
   const [streak, setStreak] = useState(0);
   const [totalDays, setTotalDays] = useState(0);
   const [showCelebration, setShowCelebration] = useState(false);
-
+  const [dailyTasks, setDailyTasks] = useState([]);
   // Animation Hooks cho Flashcard
   const spin = useSharedValue(0);
   const frontStyle = useAnimatedStyle(() => ({
@@ -339,6 +339,22 @@ export default function App() {
     }
   }, [screen]);
 
+  useEffect(() => {
+    const fetchDailyTasks = async () => {
+      try {
+        const colRef = collection(db, "daily_lesson");
+        const snap = await getDocs(colRef);
+        const tasks = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setDailyTasks(tasks);
+      } catch (error) {
+        console.error("Lỗi lấy bài tập hàng ngày:", error);
+      }
+    };
+
+    if (screen === "DASHBOARD") {
+      fetchDailyTasks();
+    }
+  }, [screen]);
   // Lấy dữ liệu Streak khi vào Profile screen
   useEffect(() => {
     if (screen === "PROFILE" && userId) {
@@ -410,18 +426,20 @@ export default function App() {
     }
     setIndex(nextIdx);
   };
-
+  const [currentLessonData, setCurrentLessonData] = useState(null);
   const startStudyMode = (
     mode: "flashcard" | "listening" | "speaking" | "dialog" | "fill",
   ) => {
     setStudyMode(mode);
-    setExerciseIndex(0);
+    setExerciseIndex(0); // Luôn reset về câu đầu tiên
+    setIndex(0); // Dành cho flashcard
+
+    // Reset các trạng thái khác
     setFillAnswer("");
     setShowListeningFeedback(false);
     setListeningCorrect(false);
-    if (mode === "flashcard") {
-      setIndex(0);
-    }
+    setSpeakingRecorded(false);
+
     setScreen("STUDY");
   };
 
@@ -697,18 +715,32 @@ export default function App() {
         </View>
         <View style={[styles.lessonListCard, styles.lessonCardGlass]}>
           <Text style={styles.cardTitle}>Bài tập hàng ngày</Text>
-          {["Tự vựng N5: Bài 1", "Ngữ pháp: Thì hiện tại"].map((item, i) => (
-            <View key={i} style={styles.lessonItem}>
-              <View style={styles.lessonIcon}>
-                <Text>📖</Text>
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.lessonTitle}>{item}</Text>
-                <Text style={styles.lessonSub}>Bấm để bắt đầu</Text>
-              </View>
-              <Text style={{ color: THEME.primary }}>→</Text>
-            </View>
-          ))}
+          {dailyTasks.length > 0 ? (
+            dailyTasks.map((item, i) => (
+              <TouchableOpacity
+                key={item.id || i}
+                style={styles.lessonItem}
+                // Nút này sẽ kích hoạt mode học tương ứng và chuyển sang màn hình STUDY
+                onPress={() => startStudyMode(item.mode, item)}
+              >
+                <View style={styles.lessonIcon}>
+                  <Text>{item.icon || "📖"}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.lessonTitle}>{item.title}</Text>
+                  <Text style={styles.lessonSub}>{item.sub}</Text>
+                </View>
+                {/* Nút Bắt đầu này sẽ hoạt động giống hệt các thẻ bài tập luyện ở trên */}
+                <Text style={{ color: THEME.primary, fontWeight: "bold" }}>
+                  Bắt đầu
+                </Text>
+              </TouchableOpacity>
+            ))
+          ) : (
+            <Text style={{ textAlign: "center", color: THEME.textSecondary }}>
+              Đang tải bài tập...
+            </Text>
+          )}
         </View>
       </ScrollView>
       {renderBottomNav()}
@@ -949,20 +981,31 @@ export default function App() {
       dialog: "Luyện hội thoại",
       fill: "Điền từ",
     }[studyMode];
+    // Sử dụng let để gán lại giá trị
+    let currentExercises = [];
 
-    const currentExercises =
-      studyMode === "listening"
-        ? listeningExercises
-        : studyMode === "speaking"
-          ? speakingExercises
-          : studyMode === "dialog"
-            ? dialogExercises
-            : studyMode === "fill"
-              ? fillExercises
-              : vocab;
+    // Gán mảng dữ liệu tương ứng với studyMode
+    if (studyMode === "listening") currentExercises = listeningExercises;
+    else if (studyMode === "speaking") currentExercises = speakingExercises;
+    else if (studyMode === "dialog") currentExercises = dialogExercises;
+    else if (studyMode === "fill") currentExercises = fillExercises;
+    else currentExercises = vocab; // Mặc định cho flashcard
 
-    const totalExercises = currentExercises.length;
-    const currentExercise = currentExercises[exerciseIndex];
+    // Đảm bảo không bị lỗi undefined nếu mảng rỗng
+    const totalExercises = currentExercises ? currentExercises.length : 0;
+    const currentExercise =
+      totalExercises > 0 ? currentExercises[exerciseIndex] : null;
+
+    // Nếu chưa có dữ liệu bài tập, hiển thị màn hình chờ thay vì báo lỗi
+    if (!currentExercise && studyMode !== "flashcard") {
+      return (
+        <SafeAreaView style={styles.studyContainer}>
+          <Text style={{ textAlign: "center", marginTop: 50 }}>
+            Đang tải bài học...
+          </Text>
+        </SafeAreaView>
+      );
+    }
 
     return (
       <SafeAreaView style={styles.studyContainer}>
@@ -1659,16 +1702,18 @@ const styles = StyleSheet.create({
   // Bottom Nav
   bottomNav: {
     position: "absolute",
-    bottom: 0,
-    width: "100%",
-    height: 90,
-    backgroundColor: THEME.white,
+    bottom: 25, // Đẩy lên một chút để tạo cảm giác nổi
+    left: 20,
+    right: 20,
+    height: 70,
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    elevation: 20,
+    borderRadius: 35, // Bo tròn mạnh
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.5)",
   },
   navItem: { alignItems: "center" },
   navDot: {
@@ -1706,19 +1751,17 @@ const styles = StyleSheet.create({
     marginVertical: 16,
   },
   modeCard: {
-    width: "48%",
-    padding: 18,
-    borderRadius: 20,
+    width: "46%",
+    padding: 20,
+    borderRadius: 24,
     backgroundColor: THEME.white,
-    marginBottom: 12,
-    alignItems: "center",
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    borderWidth: 1,
-    borderColor: "rgba(63, 81, 181, 0.08)",
+    marginBottom: 16,
+    // Hiệu ứng đổ bóng sâu hơn
+    shadowColor: "#3D5CFF",
+    shadowOpacity: 0.1,
+    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 5,
   },
   modeCardIcon: {
     fontSize: 28,
